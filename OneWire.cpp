@@ -163,9 +163,17 @@ void OneWire::begin(uint8_t pin)
 //
 uint8_t OneWire::reset(void)
 {
+	if (! reset_1()) return 0;
+	delayMicroseconds(480);
+	return reset_2();
+}
+
+// Perform the first half of the reset function.
+// Returns zero if the wire didn't become high, 1 otherwise.
+uint8_t OneWire::reset_1(void)
+{
 	IO_REG_TYPE mask IO_REG_MASK_ATTR = bitmask;
 	volatile IO_REG_TYPE *reg IO_REG_BASE_ATTR = baseReg;
-	uint8_t r;
 	uint8_t retries = 125;
 
 	noInterrupts();
@@ -181,13 +189,27 @@ uint8_t OneWire::reset(void)
 	DIRECT_WRITE_LOW(reg, mask);
 	DIRECT_MODE_OUTPUT(reg, mask);	// drive output low
 	interrupts();
-	delayMicroseconds(480);
+
+	return 1;
+}
+
+// Perform the second half of the reset function.
+// There must be a gap of at least 480us between calling reset_1() and reset_2().
+// Returns 1 if a device asserted a presence pulse, 0 otherwise.
+uint8_t OneWire::reset_2(void)
+{
+	IO_REG_TYPE mask IO_REG_MASK_ATTR = bitmask;
+	volatile IO_REG_TYPE *reg IO_REG_BASE_ATTR = baseReg;
+	uint8_t r;
+
 	noInterrupts();
 	DIRECT_MODE_INPUT(reg, mask);	// allow it to float
-	delayMicroseconds(70);
+	delayMicroseconds(70); // must be more than 60us, and less than (15+60)us
 	r = !DIRECT_READ(reg, mask);
 	interrupts();
-	delayMicroseconds(410);
+
+	// there must be a gap of at least 480us before further actions on the bus
+
 	return r;
 }
 
@@ -195,33 +217,50 @@ uint8_t OneWire::reset(void)
 // Write a bit. Port and bit is used to cut lookup time and provide
 // more certain timing.
 //
+// Datasheet: All write time slots must be a minimum of 60us in
+// duration, with a minimum of a 1us recovery time between individual
+// write slots.
+//
 void OneWire::write_bit(uint8_t v)
 {
 	IO_REG_TYPE mask IO_REG_MASK_ATTR = bitmask;
 	volatile IO_REG_TYPE *reg IO_REG_BASE_ATTR = baseReg;
 
+	noInterrupts();
+	DIRECT_WRITE_LOW(reg, mask);
+	DIRECT_MODE_OUTPUT(reg, mask);	// drive output low
+
 	if (v & 1) {
-		noInterrupts();
-		DIRECT_WRITE_LOW(reg, mask);
-		DIRECT_MODE_OUTPUT(reg, mask);	// drive output low
 		delayMicroseconds(10);
 		DIRECT_WRITE_HIGH(reg, mask);	// drive output high
-		interrupts();
-		delayMicroseconds(55);
 	} else {
 		noInterrupts();
 		DIRECT_WRITE_LOW(reg, mask);
 		DIRECT_MODE_OUTPUT(reg, mask);	// drive output low
 		delayMicroseconds(65);
 		DIRECT_WRITE_HIGH(reg, mask);	// drive output high
-		interrupts();
-		delayMicroseconds(5);
 	}
+
+	interrupts();
 }
 
 //
 // Read a bit. Port and bit is used to cut lookup time and provide
 // more certain timing.
+//
+// Datasheet: All read time slots must be a minimum of 60us in
+// duration with a minimum of a 1us recovery time between slots. A
+// read time slot is initiated by the master device pulling the 1-Wire
+// bus low for a minimum of 1μs and then releasing the bus (see Figure
+// 16). After the master initiates the read time slot, the DS18B20
+// will begin transmitting a 1 or 0 on bus. The DS18B20 transmits a 1
+// by leaving the bus high and transmits a 0 by pulling the bus
+// low. When transmitting a 0, the DS18B20 will release the bus by the
+// end of the time slot, and the bus will be pulled back to its high
+// idle state by the pullup resister. Output data from the DS18B20 is
+// valid for 15us after the falling edge that initiated the read time
+// slot. Therefore, the master must release the bus and then sample
+// the bus state within 15us from the start of the slot.
 //
 uint8_t OneWire::read_bit(void)
 {
@@ -237,7 +276,6 @@ uint8_t OneWire::read_bit(void)
 	delayMicroseconds(10);
 	r = DIRECT_READ(reg, mask);
 	interrupts();
-	delayMicroseconds(53);
 	return r;
 }
 
@@ -249,17 +287,21 @@ uint8_t OneWire::read_bit(void)
 // other mishap.
 //
 void OneWire::write(uint8_t v, uint8_t power /* = 0 */) {
-    uint8_t bitMask;
+	uint8_t bitMask;
 
-    for (bitMask = 0x01; bitMask; bitMask <<= 1) {
-	OneWire::write_bit( (bitMask & v)?1:0);
-    }
-    if ( !power) {
-	noInterrupts();
-	DIRECT_MODE_INPUT(baseReg, bitmask);
-	DIRECT_WRITE_LOW(baseReg, bitmask);
-	interrupts();
-    }
+	for (bitMask = 0x01; bitMask; bitMask <<= 1) {
+		uint8_t bit = (bitMask & v)?1:0;
+		OneWire::write_bit(bit);
+		if (bit) {
+			delayMicroseconds(55);
+		}
+	}
+	if ( !power) {
+		noInterrupts();
+		DIRECT_MODE_INPUT(baseReg, bitmask);
+		DIRECT_WRITE_LOW(baseReg, bitmask);
+		interrupts();
+	}
 }
 
 void OneWire::write_bytes(const uint8_t *buf, uint16_t count, bool power /* = 0 */) {
@@ -281,7 +323,8 @@ uint8_t OneWire::read() {
     uint8_t r = 0;
 
     for (bitMask = 0x01; bitMask; bitMask <<= 1) {
-	if ( OneWire::read_bit()) r |= bitMask;
+	if (OneWire::read_bit()) r |= bitMask;
+	delayMicroseconds(53);
     }
     return r;
 }
