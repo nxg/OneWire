@@ -231,16 +231,21 @@ void OneWire::write_bit(uint8_t v)
 	DIRECT_MODE_OUTPUT(reg, mask);	// drive output low
 
 	if (v & 1) {
+		// Datasheet: To generate a Write 1 time slot, after
+		// pulling the 1-Wire bus low, the bus master must
+		// release the 1-Wire bus within 15us. When the bus is
+		// released, the 5kOhm pullup resistor will pull the
+		// bus high.
 		delayMicroseconds(10);
-		DIRECT_WRITE_HIGH(reg, mask);	// drive output high
 	} else {
-		noInterrupts();
-		DIRECT_WRITE_LOW(reg, mask);
-		DIRECT_MODE_OUTPUT(reg, mask);	// drive output low
+		// To generate a Write 0 time slot, after pulling the
+		// 1-Wire bus low, the bus master must continue to
+		// hold the bus low for the duration of the time slot
+		// (at least 60us).
 		delayMicroseconds(65);
-		DIRECT_WRITE_HIGH(reg, mask);	// drive output high
 	}
 
+	DIRECT_MODE_INPUT(reg, mask);	// release
 	interrupts();
 }
 
@@ -271,8 +276,10 @@ uint8_t OneWire::read_bit(void)
 	noInterrupts();
 	DIRECT_MODE_OUTPUT(reg, mask);
 	DIRECT_WRITE_LOW(reg, mask);
+	// must be low for minimum of 1us
 	delayMicroseconds(3);
 	DIRECT_MODE_INPUT(reg, mask);	// let pin float, pull up will raise
+	// DS18B20 data is valid for 15us after falling edge
 	delayMicroseconds(10);
 	r = DIRECT_READ(reg, mask);
 	interrupts();
