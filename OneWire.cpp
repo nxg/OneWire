@@ -32,6 +32,9 @@ private email about OneWire).
 OneWire is now very mature code.  No changes other than adding
 definitions for newer hardware support are anticipated.
 
+Modified to add 'no-delay' functions, by Norman Gray
+  (see no-delay branch of https://github.com/nxg/OneWire/)
+
 Version 2.3:
   Unknown chip fallback mode, Roger Clark
   Teensy-LC compatibility, Paul Stoffregen
